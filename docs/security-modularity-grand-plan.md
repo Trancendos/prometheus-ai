@@ -131,6 +131,13 @@ Required baseline:
 - Contract-level architecture docs and integration standards across ecosystem repos.
 - Merge/split execution for overlapping low-value repos.
 
+### Phase 1 execution note
+
+- First P0 batch rollout was initiated for `shared-core`, `central-plexus`, `the-foundation`, `the-nexus`.
+- `shared-core` baseline was implemented and validated locally.
+- Remote push to additional repositories is currently blocked by GitHub write permissions for the active automation identity (`403`).
+- Detailed execution and runbook are tracked in `docs/phase1-rollout-status.md`.
+
 ## Repo-by-Repo Gap Source of Truth
 
 For per-repository gaps and priority:
