@@ -110,6 +110,13 @@ const ECOSYSTEM_SERVICES: Array<{
   // Wave 5 — Marketplace
   { name: 'api-marketplace',   tier: 'marketplace',    port: 3040 },
   { name: 'artifactory',       tier: 'marketplace',    port: 3041 },
+  // Wave 6: The Studios
+  { name: 'section7', port: 3050, wave: 6, category: 'studio', ista: 'Bert-Joen Kater' },
+  { name: 'style-and-shoot', port: 3051, wave: 6, category: 'studio', ista: 'Madam Krystal' },
+  { name: 'fabulousa', port: 3052, wave: 6, category: 'studio', ista: 'Baron Von Hilton' },
+  { name: 'tranceflow', port: 3053, wave: 6, category: 'studio', ista: 'Junior Cesar' },
+  { name: 'tateking', port: 3054, wave: 6, category: 'studio', ista: 'Benji & Sam' },
+  { name: 'the-digitalgrid', port: 3055, wave: 6, category: 'studio', ista: 'Tyler Towncroft' },
 ];
 
 // ── Ecosystem Collector ───────────────────────────────────────────────
