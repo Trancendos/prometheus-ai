@@ -1,8 +1,8 @@
 /**
  * Prometheus AI — REST API Server
  *
- * Exposes monitoring, alerting, threat scanning, and Void Guardian
- * endpoints for the Trancendos mesh.
+ * Exposes monitoring, alerting, threat scanning, Void Guardian,
+ * AND ecosystem-wide metrics collection endpoints for the Trancendos mesh.
  *
  * Architecture: Trancendos Industry 6.0 / 2060 Standard
  */
@@ -12,6 +12,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { MonitorEngine, TargetType, AlertSeverity } from '../monitoring/monitor-engine';
+import { EcosystemCollector } from '../monitoring/ecosystem-collector';
 import { logger } from '../utils/logger';
 
 
@@ -81,6 +82,9 @@ function iamRequestMiddleware(req: Request, res: Response, next: NextFunction): 
   res.setHeader('X-Service-Id', SERVICE_ID);
   res.setHeader('X-Mesh-Address', MESH_ADDRESS);
   res.setHeader('X-IAM-Version', '1.0');
+  const traceId = req.headers['x-trace-id'] || `prom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  res.setHeader('X-Trace-Id', traceId as string);
+  (req as any).traceId = traceId;
   next();
 }
 
@@ -99,19 +103,21 @@ function iamHealthStatus() {
 // END IAM MIDDLEWARE
 // ============================================================================
 
-// ── Bootstrap ──────────────────────────────────────────────────────────────
+// ── Bootstrap ────────────────────────────────────────────────────────────────
 
 const app = express();
 export const monitor = new MonitorEngine();
+export const collector = new EcosystemCollector();
 
 app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '5mb' }));
+app.use(iamRequestMiddleware);
 app.use(morgan('combined', {
   stream: { write: (msg: string) => logger.info(msg.trim()) },
 }));
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function ok(res: Response, data: unknown, status = 200): void {
   res.status(status).json({ success: true, data, timestamp: new Date().toISOString() });
@@ -125,27 +131,126 @@ function wrap(fn: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => fn(req, res).catch(next);
 }
 
-// ── Health ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 1: HEALTH & CORE METRICS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 app.get('/health', (_req, res) => {
+  const ecosystemHealth = collector.getEcosystemHealth();
   ok(res, {
     status: 'healthy',
     service: 'prometheus-ai',
+    role: 'ecosystem-monitor',
     uptime: process.uptime(),
     lockdown: monitor.isLockdownActive(),
     threatLevel: monitor.getCurrentThreatLevel(),
+    ecosystem: {
+      totalServices: ecosystemHealth.totalServices,
+      onlineServices: ecosystemHealth.onlineServices,
+      degradedServices: ecosystemHealth.degradedServices,
+      offlineServices: ecosystemHealth.offlineServices,
+      healthPercent: ecosystemHealth.overallHealthPercent,
+    },
+    ...iamHealthStatus(),
+    mesh: {
+      address: MESH_ADDRESS,
+      protocol: process.env.MESH_ROUTING_PROTOCOL || 'static_port',
+    },
   });
 });
 
+// Internal metrics (prometheus-ai own stats)
 app.get('/metrics', (_req, res) => {
   ok(res, {
     ...monitor.getStats(),
+    collector: collector.getCollectorStats(),
     memory: process.memoryUsage(),
     uptime: process.uptime(),
   });
 });
 
-// ── Monitoring Targets ─────────────────────────────────────────────────────
+// Prometheus text format — ecosystem-wide (for external scrapers / Grafana)
+app.get('/metrics/prometheus', (_req, res) => {
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+  res.send(collector.exportPrometheusText());
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 2: ECOSYSTEM METRICS INGESTION (services push here)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// POST /ecosystem/register — service self-registration
+app.post('/ecosystem/register', (req, res) => {
+  const { serviceId, name, tier, port, version, metadata } = req.body;
+  if (!serviceId || !name || !port) {
+    return fail(res, 'serviceId, name, port are required');
+  }
+  const reg = collector.registerService({ serviceId, name, tier, port, version, metadata });
+  ok(res, reg, 201);
+});
+
+// POST /ecosystem/ingest — batch metrics push
+app.post('/ecosystem/ingest', (req, res) => {
+  const { serviceId, metrics: metricsBatch } = req.body;
+  if (!serviceId || !Array.isArray(metricsBatch)) {
+    return fail(res, 'serviceId and metrics[] are required');
+  }
+  const result = collector.ingestMetrics(serviceId, metricsBatch);
+  ok(res, result, 201);
+});
+
+// POST /ecosystem/snapshot — service health snapshot push
+app.post('/ecosystem/snapshot', (req, res) => {
+  const { serviceId, ...data } = req.body;
+  if (!serviceId) {
+    return fail(res, 'serviceId is required');
+  }
+  const snapshot = collector.ingestSnapshot(serviceId, data);
+  ok(res, snapshot, 201);
+});
+
+// GET /ecosystem/health — aggregated ecosystem health
+app.get('/ecosystem/health', (_req, res) => {
+  const health = collector.getEcosystemHealth();
+  // Overlay threat level from MonitorEngine
+  health.threatLevel = monitor.getCurrentThreatLevel();
+  ok(res, health);
+});
+
+// GET /ecosystem/registry — list all registered services
+app.get('/ecosystem/registry', (_req, res) => {
+  const registry = collector.getRegistry();
+  ok(res, { services: registry, count: registry.length });
+});
+
+// GET /ecosystem/registry/:serviceId — get specific service registration
+app.get('/ecosystem/registry/:serviceId', (req, res) => {
+  const reg = collector.getServiceRegistration(req.params.serviceId);
+  if (!reg) return fail(res, 'Service not found in registry', 404);
+  ok(res, reg);
+});
+
+// GET /ecosystem/dashboard — full dashboard payload
+app.get('/ecosystem/dashboard', (_req, res) => {
+  const health = collector.getEcosystemHealth();
+  health.threatLevel = monitor.getCurrentThreatLevel();
+  const stats = monitor.getStats();
+  const collectorStats = collector.getCollectorStats();
+  const alerts = monitor.getAlerts(false);
+
+  ok(res, {
+    ecosystem: health,
+    monitoring: stats,
+    collector: collectorStats,
+    recentAlerts: alerts.slice(0, 20),
+    lockdown: monitor.isLockdownActive(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 3: MONITORING TARGETS (original prometheus-ai functionality)
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /targets — list all monitoring targets
 app.get('/targets', (req, res) => {
@@ -167,10 +272,6 @@ app.post('/targets', (req, res) => {
   if (!name || !type || !endpoint) {
     return fail(res, 'name, type, endpoint are required');
   }
-  const validTypes: TargetType[] = ['agent', 'service', 'database', 'api', 'system'];
-  if (!validTypes.includes(type)) {
-    return fail(res, `type must be one of: ${validTypes.join(', ')}`);
-  }
   const target = monitor.addTarget({ name, type: type as TargetType, endpoint });
   ok(res, target, 201);
 });
@@ -189,7 +290,9 @@ app.delete('/targets/:id', (req, res) => {
   ok(res, { deleted: true, id: req.params.id });
 });
 
-// ── Metrics ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 4: METRICS DATA (original prometheus-ai functionality)
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /metrics-data — list all metric series
 app.get('/metrics-data', (req, res) => {
@@ -215,7 +318,9 @@ app.post('/metrics-data', (req, res) => {
   ok(res, series, 201);
 });
 
-// ── Alerts ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 5: ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /alerts — list alerts
 app.get('/alerts', (req, res) => {
@@ -230,10 +335,6 @@ app.post('/alerts', (req, res) => {
   if (!type || !severity || !source || !message) {
     return fail(res, 'type, severity, source, message are required');
   }
-  const validSeverities: AlertSeverity[] = ['info', 'warning', 'critical', 'emergency'];
-  if (!validSeverities.includes(severity)) {
-    return fail(res, `severity must be one of: ${validSeverities.join(', ')}`);
-  }
   const alert = monitor.raiseAlert({ type, severity: severity as AlertSeverity, source, message });
   ok(res, alert, 201);
 });
@@ -247,7 +348,9 @@ app.patch('/alerts/:id/acknowledge', (req, res) => {
   ok(res, alert);
 });
 
-// ── Threat Management ──────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 6: THREAT MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /threat-level — current threat level
 app.get('/threat-level', (_req, res) => {
@@ -269,7 +372,9 @@ app.get('/threat-reports', (req, res) => {
   ok(res, { reports, count: reports.length });
 });
 
-// ── Emergency Lockdown ─────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 7: EMERGENCY LOCKDOWN
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /lockdown — lockdown status
 app.get('/lockdown', (_req, res) => {
@@ -292,7 +397,9 @@ app.delete('/lockdown', (req, res) => {
   ok(res, result, result.success ? 200 : 409);
 });
 
-// ── Void Guardian ──────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 8: VOID GUARDIAN
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /void — list void keys
 app.get('/void', (_req, res) => {
@@ -324,13 +431,18 @@ app.delete('/void/:key', (req, res) => {
   ok(res, { deleted: true, key: req.params.key });
 });
 
-// ── Stats ──────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 9: STATS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 app.get('/stats', (_req, res) => {
-  ok(res, monitor.getStats());
+  ok(res, {
+    monitor: monitor.getStats(),
+    collector: collector.getCollectorStats(),
+  });
 });
 
-// ── Error Handler ──────────────────────────────────────────────────────────
+// ── Error Handler ────────────────────────────────────────────────────────────
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   logger.error({ err }, 'Unhandled error');

@@ -1,21 +1,23 @@
 /**
  * Prometheus AI — Entry Point
  *
- * Monitoring, alerting, and Void Guardian service for the Trancendos mesh.
- * Tracks all agents and services, detects anomalies, manages threat levels.
+ * Monitoring, alerting, Void Guardian, and ecosystem-wide metrics
+ * collection service for the Trancendos mesh.
+ * Tracks all 24+ agents and services, detects anomalies, manages threat levels,
+ * and aggregates ecosystem health telemetry.
  * Zero-cost compliant — no LLM calls.
  *
  * Port: 3019
  * Architecture: Trancendos Industry 6.0 / 2060 Standard
  */
 
-import { app, monitor } from './api/server';
+import { app, monitor, collector } from './api/server';
 import { logger } from './utils/logger';
 
 const PORT = Number(process.env.PORT ?? 3019);
 const HOST = process.env.HOST ?? '0.0.0.0';
 
-// ── Startup ────────────────────────────────────────────────────────────────
+// ── Startup ──────────────────────────────────────────────────────────────────
 
 async function bootstrap(): Promise<void> {
   logger.info('Prometheus AI starting up...');
@@ -23,7 +25,7 @@ async function bootstrap(): Promise<void> {
   const server = app.listen(PORT, HOST, () => {
     logger.info(
       { port: PORT, host: HOST, env: process.env.NODE_ENV ?? 'development' },
-      '🔥 Prometheus AI is online — The Void is watching',
+      '🔥 Prometheus AI is online — The Void is watching | Ecosystem Collector active',
     );
   });
 
@@ -33,6 +35,7 @@ async function bootstrap(): Promise<void> {
     try {
       const threatLevel = monitor.getCurrentThreatLevel();
       const stats = monitor.getStats();
+      const collectorStats = collector.getCollectorStats();
       logger.info(
         {
           threatLevel,
@@ -41,8 +44,11 @@ async function bootstrap(): Promise<void> {
           totalAlerts: stats.totalAlerts,
           unacknowledgedAlerts: stats.unacknowledgedAlerts,
           lockdownActive: monitor.isLockdownActive(),
+          ecosystemServices: collectorStats.registeredServices,
+          servicesReporting: collectorStats.servicesWithSnapshots,
+          totalIngestedMetrics: collectorStats.totalIngestedMetrics,
         },
-        '🔥 Prometheus periodic threat assessment',
+        '🔥 Prometheus periodic threat assessment + ecosystem status',
       );
 
       if (threatLevel === 'red' && !monitor.isLockdownActive()) {
@@ -57,6 +63,7 @@ async function bootstrap(): Promise<void> {
   const shutdown = (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     clearInterval(threatTimer);
+    collector.shutdown();
     server.close(() => {
       logger.info('Prometheus AI shut down cleanly');
       process.exit(0);
@@ -64,7 +71,7 @@ async function bootstrap(): Promise<void> {
     setTimeout(() => {
       logger.warn('Forced shutdown after timeout');
       process.exit(1);
-    }, 10_000);
+    }, 30_000);
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
