@@ -1,33 +1,27 @@
-# Security Policy
+# Security Policy — prometheus-ai
 
 ## Supported Versions
 
-This repository follows a direct dependency policy of **N (latest major) or N-1**.
-
 | Version | Supported |
-| --- | --- |
-| main branch | Yes |
-| Older release branches | No |
+|---------|-----------|
+| 1.x     | ✅ Yes    |
 
-## Reporting a Vulnerability
+## Security Standards
 
-Please report suspected vulnerabilities privately via GitHub Security Advisories:
+This service adheres to the Trancendos 2060 Security Standard:
 
-1. Open the repository's **Security** tab.
-2. Click **Report a vulnerability**.
-3. Include reproduction details, impact, and any proof-of-concept.
+- **Authentication**: HS512 JWT via `@trancendos/iam-middleware`
+- **Authorization**: RBAC + ABAC 5-step evaluation chain
+- **Cryptography**: SHA-512 integrity hashes, bcrypt passwords
+- **Transport**: TLS 1.3+ in production
+- **OWASP**: Helmet.js, CORS, rate limiting
+- **Zero-Trust**: Every request verified, least-privilege
 
-Do not open public issues for unpatched vulnerabilities.
+## Reporting Vulnerabilities
 
-## Security Response Targets
+Report security vulnerabilities to the Continuity Guardian.
+Do NOT create public GitHub issues for security vulnerabilities.
 
-- Initial triage: within 24 hours
-- Severity confirmation and remediation plan: within 72 hours
-- Critical fixes: target patch within 7 days
+## 2060 Quantum-Safe Migration Path
 
-## Baseline Security Controls
-
-- Daily/PR vulnerability scanning through OSV and advisory audit workflows
-- PR dependency delta checks with `dependency-review-action`
-- Automated dependency updates via Dependabot
-- N/N-1 dependency drift enforcement via `scripts/check-n-minus-one.mjs`
+`hmac_sha512` → `ml_kem (2030)` → `hybrid_pqc (2040)` → `slh_dsa (2060)`
