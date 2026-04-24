@@ -1,0 +1,41 @@
+name: dependency-governance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 4 * * 1"
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  n-minus-one-compliance:
+    name: Enforce N/N-1 dependency policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate N/N-1 compliance
+        run: pnpm run security:n-1
+
+      - name: Print outdated report
+        run: pnpm outdated || true
